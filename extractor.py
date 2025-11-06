@@ -36,6 +36,8 @@ class TextExtractor:
                 for page in pdf_reader.pages:
                     page_text = page.extract_text()
                     if page_text:
+                        # Clean text to remove surrogate pairs and invalid UTF-8 characters
+                        page_text = page_text.encode('utf-8', errors='ignore').decode('utf-8', errors='ignore')
                         text += page_text
 
             # If text is minimal, it might be a scanned PDF
