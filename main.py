@@ -511,6 +511,8 @@ class PackageCreate(BaseModel):
 @app.post("/api/cases")
 async def create_case(case_data: CaseCreate):
     """Create a new case"""
+    if case_manager is None:
+        raise HTTPException(status_code=503, detail="Case management service not available")
     try:
         case = await case_manager.create_case(
             name=case_data.name,

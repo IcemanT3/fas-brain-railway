@@ -13,13 +13,20 @@ from supabase import create_client, Client
 # Initialize Supabase client
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://rlhaxgpojdbflaeamhty.supabase.co")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# Only create client if key is available
+if SUPABASE_KEY:
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+else:
+    supabase = None
 
 
 class CaseManager:
     """Manages legal cases and document grouping"""
     
     def __init__(self):
+        if supabase is None:
+            raise RuntimeError("Supabase client not initialized. SUPABASE_SERVICE_ROLE_KEY environment variable is required.")
         self.supabase = supabase
     
     async def create_case(
@@ -433,5 +440,8 @@ class CaseManager:
         return package.get("file_path")
 
 
-# Global instance
-case_manager = CaseManager()
+# Global instance - only create if supabase is available
+if supabase:
+    case_manager = CaseManager()
+else:
+    case_manager = None
