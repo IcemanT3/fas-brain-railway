@@ -19,6 +19,9 @@ sys.path.insert(0, str(Path(__file__).parent))
 from document_processor import DocumentProcessor
 from search_engine import SearchEngine
 from entity_manager import EntityManager
+from hybrid_search import hybrid_search
+from deduplicator import deduplicator
+from admin_console import admin_console
 
 # Initialize FastAPI
 app = FastAPI(
@@ -299,6 +302,126 @@ async def internal_error_handler(request, exc):
         status_code=500,
         content={"detail": "Internal server error"}
     )
+
+
+# Hybrid Search Endpoints
+
+@app.post("/api/search/hybrid")
+async def hybrid_search_endpoint(request: SearchRequest):
+    """Perform hybrid search combining vector and full-text search"""
+    if hybrid_search is None:
+        raise HTTPException(status_code=503, detail="Hybrid search service not available")
+    try:
+        results = await hybrid_search.search(
+            query=request.query,
+            top_k=request.top_k if hasattr(request, 'top_k') else 10,
+            entity_filter=request.entity_filter,
+            entity_type_filter=request.entity_type_filter,
+            document_type_filter=request.document_type_filter
+        )
+        return {"success": True, "results": results}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Deduplication Endpoints
+
+@app.get("/api/admin/duplicates")
+async def get_duplicates():
+    """Get all duplicate document groups"""
+    if deduplicator is None:
+        raise HTTPException(status_code=503, detail="Deduplication service not available")
+    try:
+        groups = await deduplicator.get_duplicate_groups()
+        return {"success": True, "duplicate_groups": groups}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/admin/deduplication/stats")
+async def get_deduplication_stats():
+    """Get deduplication statistics"""
+    if deduplicator is None:
+        raise HTTPException(status_code=503, detail="Deduplication service not available")
+    try:
+        stats = await deduplicator.get_deduplication_stats()
+        return {"success": True, "stats": stats}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/admin/duplicates/merge")
+async def merge_duplicates(keep_id: str, remove_ids: List[str]):
+    """Merge duplicate documents"""
+    if deduplicator is None:
+        raise HTTPException(status_code=503, detail="Deduplication service not available")
+    try:
+        result = await deduplicator.merge_duplicates(keep_id, remove_ids)
+        return {"success": True, "result": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Admin Console Endpoints
+
+@app.get("/api/admin/environment")
+async def validate_environment():
+    """Validate environment configuration"""
+    if admin_console is None:
+        raise HTTPException(status_code=503, detail="Admin console service not available")
+    try:
+        validation = await admin_console.validate_environment()
+        return validation
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/admin/metrics")
+async def get_system_metrics():
+    """Get system resource metrics"""
+    if admin_console is None:
+        raise HTTPException(status_code=503, detail="Admin console service not available")
+    try:
+        metrics = await admin_console.get_system_metrics()
+        return metrics
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/admin/ingestion")
+async def get_ingestion_stats(hours: int = 24):
+    """Get document ingestion statistics"""
+    if admin_console is None:
+        raise HTTPException(status_code=503, detail="Admin console service not available")
+    try:
+        stats = await admin_console.get_ingestion_stats(hours)
+        return stats
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/admin/queue")
+async def get_queue_status():
+    """Get processing queue status"""
+    if admin_console is None:
+        raise HTTPException(status_code=503, detail="Admin console service not available")
+    try:
+        status = await admin_console.get_processing_queue_status()
+        return status
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/admin/dashboard")
+async def get_health_dashboard():
+    """Get comprehensive health dashboard"""
+    if admin_console is None:
+        raise HTTPException(status_code=503, detail="Admin console service not available")
+    try:
+        dashboard = await admin_console.get_health_dashboard()
+        return dashboard
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":
