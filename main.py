@@ -473,3 +473,231 @@ async def generate_case_package(case_name: str):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# Import case manager
+from case_manager import case_manager
+
+
+# Pydantic models for case management
+class CaseCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    created_by: Optional[str] = None
+
+
+class CaseUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    status: Optional[str] = None
+
+
+class CaseDocumentAdd(BaseModel):
+    document_id: str
+    display_order: Optional[int] = None
+    notes: Optional[str] = None
+
+
+class CaseDocumentReorder(BaseModel):
+    document_order: List[str]
+
+
+class PackageCreate(BaseModel):
+    format: str = "zip"  # zip or pdf
+
+
+# Case Management Endpoints
+
+@app.post("/api/cases")
+async def create_case(case_data: CaseCreate):
+    """Create a new case"""
+    try:
+        case = await case_manager.create_case(
+            name=case_data.name,
+            description=case_data.description,
+            created_by=case_data.created_by
+        )
+        return {"success": True, "case": case}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/cases")
+async def list_cases(
+    status: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0
+):
+    """List all cases"""
+    try:
+        cases = await case_manager.list_cases(
+            status=status,
+            limit=limit,
+            offset=offset
+        )
+        return {"success": True, "cases": cases, "total": len(cases)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/cases/{case_id}")
+async def get_case(case_id: str):
+    """Get case details with documents"""
+    try:
+        case = await case_manager.get_case(case_id)
+        if not case:
+            raise HTTPException(status_code=404, detail="Case not found")
+        return {"success": True, "case": case}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/cases/{case_id}")
+async def update_case(case_id: str, case_data: CaseUpdate):
+    """Update case information"""
+    try:
+        case = await case_manager.update_case(
+            case_id=case_id,
+            name=case_data.name,
+            description=case_data.description,
+            status=case_data.status
+        )
+        if not case:
+            raise HTTPException(status_code=404, detail="Case not found")
+        return {"success": True, "case": case}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/cases/{case_id}")
+async def delete_case(case_id: str):
+    """Delete a case"""
+    try:
+        success = await case_manager.delete_case(case_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Case not found")
+        return {"success": True, "message": "Case deleted successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/cases/{case_id}/documents")
+async def add_document_to_case(case_id: str, doc_data: CaseDocumentAdd):
+    """Add a document to a case"""
+    try:
+        result = await case_manager.add_document_to_case(
+            case_id=case_id,
+            document_id=doc_data.document_id,
+            display_order=doc_data.display_order,
+            notes=doc_data.notes
+        )
+        return {"success": True, "case_document": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/cases/{case_id}/documents/{document_id}")
+async def remove_document_from_case(case_id: str, document_id: str):
+    """Remove a document from a case"""
+    try:
+        success = await case_manager.remove_document_from_case(case_id, document_id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Document not found in case")
+        return {"success": True, "message": "Document removed from case"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/cases/{case_id}/documents/reorder")
+async def reorder_case_documents(case_id: str, reorder_data: CaseDocumentReorder):
+    """Reorder documents in a case"""
+    try:
+        success = await case_manager.reorder_documents(
+            case_id=case_id,
+            document_order=reorder_data.document_order
+        )
+        return {"success": True, "message": "Documents reordered successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/cases/{case_id}/items")
+async def get_case_items(case_id: str):
+    """Get list of documents in a case (charter endpoint)"""
+    try:
+        case = await case_manager.get_case(case_id)
+        if not case:
+            raise HTTPException(status_code=404, detail="Case not found")
+        
+        documents = case.get("documents", [])
+        return {"success": True, "items": documents, "total": len(documents)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Package Export Endpoints
+
+@app.post("/api/packages")
+async def create_package(package_data: PackageCreate, case_id: str):
+    """Create a package export for a case"""
+    try:
+        package = await case_manager.create_package(
+            case_id=case_id,
+            format=package_data.format
+        )
+        return {"success": True, "package": package}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/packages/{package_id}")
+async def get_package(package_id: str):
+    """Get package status and information"""
+    try:
+        package = await case_manager.get_package(package_id)
+        if not package:
+            raise HTTPException(status_code=404, detail="Package not found")
+        return {"success": True, "package": package}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/packages/{package_id}/download")
+async def download_package(package_id: str):
+    """Download a package file"""
+    from fastapi.responses import FileResponse
+    
+    try:
+        file_path = await case_manager.get_package_file_path(package_id)
+        
+        if not file_path or not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail="Package file not found or not ready")
+        
+        # Increment download count
+        package = await case_manager.get_package(package_id)
+        if package:
+            await case_manager.supabase.table("packages").update({
+                "download_count": package.get("download_count", 0) + 1
+            }).eq("id", package_id).execute()
+        
+        return FileResponse(
+            file_path,
+            media_type="application/zip",
+            filename=os.path.basename(file_path)
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
