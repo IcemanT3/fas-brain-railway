@@ -81,6 +81,7 @@ class DocumentProcessor:
             
             document_record = {
                 "filename": os.path.basename(file_path),
+                "original_path": file_path,
                 "document_type": category_info['document_type'],
                 "full_text": full_text,
                 "file_hash": doc_hash,
