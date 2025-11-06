@@ -6,9 +6,10 @@ Extract text from various document formats
 import os
 import PyPDF2
 import docx
-from PIL import Image
-import pytesseract
-from pdf2image import convert_from_path
+# OCR dependencies temporarily disabled for Railway deployment
+# from PIL import Image
+# import pytesseract
+# from pdf2image import convert_from_path
 
 class TextExtractor:
     """Extract text from PDF, DOCX, and TXT files, with OCR for scanned PDFs"""
@@ -39,13 +40,12 @@ class TextExtractor:
 
             # If text is minimal, it might be a scanned PDF
             if len(text.strip()) < 100:
-                print("PDF appears to be scanned, falling back to OCR...")
-                return self._ocr_pdf(file_path)
+                print("Warning: PDF appears to be scanned. OCR not available in this deployment.")
             
             return text
         except Exception as e:
-            print(f"Error extracting text from PDF, falling back to OCR: {e}")
-            return self._ocr_pdf(file_path)
+            print(f"Error extracting text from PDF: {e}")
+            return ""
 
     def _extract_from_docx(self, file_path):
         """Extract text from a DOCX file"""
@@ -60,18 +60,19 @@ class TextExtractor:
         with open(file_path, "r", encoding="utf-8") as f:
             return f.read()
 
-    def _ocr_pdf(self, file_path):
-        """Use OCR to extract text from a scanned PDF"""
-        text = ""
-        try:
-            images = convert_from_path(file_path)
-            for i, image in enumerate(images):
-                print(f"  OCR processing page {i+1}/{len(images)}...")
-                text += pytesseract.image_to_string(image)
-            return text
-        except Exception as e:
-            print(f"OCR failed for {file_path}: {e}")
-            return ""
+    # OCR functionality temporarily disabled for Railway deployment
+    # def _ocr_pdf(self, file_path):
+    #     """Use OCR to extract text from a scanned PDF"""
+    #     text = ""
+    #     try:
+    #         images = convert_from_path(file_path)
+    #         for i, image in enumerate(images):
+    #             print(f"  OCR processing page {i+1}/{len(images)}...")
+    #             text += pytesseract.image_to_string(image)
+    #         return text
+    #     except Exception as e:
+    #         print(f"OCR failed for {file_path}: {e}")
+    #         return ""
 
 if __name__ == "__main__":
     # Example usage
