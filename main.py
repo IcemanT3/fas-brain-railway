@@ -305,3 +305,171 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
+
+
+# OneDrive Integration
+from onedrive_manager import OneDriveManager
+from document_organizer import DocumentOrganizer
+from case_package_generator import CasePackageGenerator
+
+onedrive = OneDriveManager()
+organizer = DocumentOrganizer()
+package_generator = CasePackageGenerator(processor.supabase)
+
+
+@app.get("/api/onedrive/auth-url")
+async def get_onedrive_auth_url():
+    """Get OneDrive OAuth authorization URL"""
+    try:
+        auth_url = onedrive.get_auth_url()
+        return {"auth_url": auth_url}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/auth/callback")
+async def onedrive_callback(code: str):
+    """Handle OneDrive OAuth callback"""
+    try:
+        success = onedrive.exchange_code_for_token(code)
+        if success:
+            # Create folder structure
+            onedrive.create_folder_structure()
+            return {"status": "success", "message": "OneDrive connected successfully"}
+        else:
+            raise HTTPException(status_code=400, detail="Failed to exchange code for token")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/onedrive/process-inbox")
+async def process_inbox():
+    """
+    Process all documents in the OneDrive inbox
+    - Analyze each document
+    - Organize into appropriate folders
+    - Update Supabase database
+    - Generate case packages
+    """
+    try:
+        # Get files from inbox
+        inbox_files = onedrive.monitor_inbox()
+        
+        results = []
+        for file_info in inbox_files:
+            filename = file_info["name"]
+            
+            # Download file
+            temp_path = f"/tmp/{filename}"
+            onedrive.download_file(f"00_INBOX/{filename}", temp_path)
+            
+            # Extract text
+            full_text = processor.extractor.extract(temp_path)
+            
+            # Organize document
+            org_result = organizer.organize_document(filename, full_text, onedrive)
+            
+            # Process in Supabase (with organization metadata)
+            proc_result = processor.process(
+                temp_path,
+                manual_category=org_result["analysis"].get("document_type")
+            )
+            
+            # Update document with organization metadata
+            processor.supabase.table("documents").update({
+                "metadata": {
+                    **proc_result.get("metadata", {}),
+                    "analysis": org_result["analysis"],
+                    "organization_paths": org_result["paths"]
+                }
+            }).eq("id", proc_result["document_id"]).execute()
+            
+            results.append({
+                "filename": filename,
+                "document_id": proc_result["document_id"],
+                "organization": org_result,
+                "success": org_result["success"]
+            })
+            
+            # Clean up
+            os.remove(temp_path)
+        
+        # Generate updated case packages
+        packages = package_generator.generate_all_case_packages()
+        for case_name, package_content in packages.items():
+            package_generator.save_package_to_onedrive(case_name, package_content, onedrive)
+        
+        return {
+            "processed": len(results),
+            "results": results,
+            "case_packages_updated": len(packages)
+        }
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/onedrive/folders")
+async def list_onedrive_folders(folder_path: str = ""):
+    """List files in a OneDrive folder"""
+    try:
+        files = onedrive.list_files(folder_path)
+        return {"files": files, "folder": folder_path}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/onedrive/share")
+async def create_share_link(folder_path: str, link_type: str = "view"):
+    """Create a sharing link for a OneDrive folder"""
+    try:
+        share_link = onedrive.create_share_link(folder_path, link_type)
+        if share_link:
+            return {"share_link": share_link, "folder": folder_path}
+        else:
+            raise HTTPException(status_code=400, detail="Failed to create share link")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/case-packages")
+async def list_case_packages():
+    """List all available case packages"""
+    try:
+        cases = [
+            "arbitration_employment",
+            "derivative_lawsuit",
+            "direct_lawsuit",
+            "class_action",
+            "regulatory_complaints"
+        ]
+        
+        packages = []
+        for case in cases:
+            docs = package_generator.get_documents_for_case(case)
+            packages.append({
+                "case_name": case,
+                "display_name": case.replace('_', ' ').title(),
+                "document_count": len(docs),
+                "onedrive_path": f"05_CASE_PACKAGES/{case}_package.md"
+            })
+        
+        return {"packages": packages}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/case-packages/generate")
+async def generate_case_package(case_name: str):
+    """Generate a specific case package"""
+    try:
+        package_content = package_generator.generate_case_package(case_name)
+        onedrive_path = package_generator.save_package_to_onedrive(case_name, package_content, onedrive)
+        
+        return {
+            "case_name": case_name,
+            "onedrive_path": onedrive_path,
+            "content_preview": package_content[:500] + "..."
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
