@@ -17,6 +17,13 @@ class OneDriveManager:
         self.tenant_id = os.getenv("MICROSOFT_TENANT_ID")
         self.redirect_uri = os.getenv("MICROSOFT_REDIRECT_URI", "https://fas-brain-railway-production.up.railway.app/auth/callback")
         
+        # Service account support (optional, defaults to /me for delegated auth)
+        self.user_id = os.getenv("ONEDRIVE_USER_ID")  # e.g., "dih-sync@fascorp.net" or user GUID
+        
+        # Cached folder IDs for faster access
+        self.fas_brain_folder_id = os.getenv("FAS_BRAIN_FOLDER_ID")  # Cache root folder ID
+        self.inbox_folder_id = os.getenv("INBOX_FOLDER_ID")  # Cache INBOX folder ID
+        
         if not all([self.client_id, self.client_secret, self.tenant_id]):
             print("WARNING: Microsoft credentials not configured. OneDrive features will be disabled.")
         
@@ -125,6 +132,15 @@ class OneDriveManager:
             if not self.refresh_access_token():
                 raise Exception("Failed to refresh access token")
     
+    def _get_drive_path(self) -> str:
+        """Get drive path for API calls (supports both /me and service account)"""
+        if self.user_id:
+            # Service account or specific user
+            return f"/users/{self.user_id}/drive"
+        else:
+            # Delegated auth to current user
+            return "/me/drive"
+    
     def _make_request(self, method: str, endpoint: str, **kwargs) -> requests.Response:
         """Make authenticated request to Microsoft Graph API"""
         self.ensure_token_valid()
@@ -140,7 +156,8 @@ class OneDriveManager:
     
     def create_folder(self, parent_path: str, folder_name: str) -> Optional[Dict]:
         """Create a folder in OneDrive"""
-        endpoint = f"/me/drive/root:/{parent_path}:/children"
+        drive_path = self._get_drive_path()
+        endpoint = f"{drive_path}/root:/{parent_path}:/children"
         
         data = {
             "name": folder_name,
@@ -180,7 +197,8 @@ class OneDriveManager:
     
     def upload_file(self, local_path: str, onedrive_path: str) -> Optional[Dict]:
         """Upload a file to OneDrive"""
-        endpoint = f"/me/drive/root:/{onedrive_path}:/content"
+        drive_path = self._get_drive_path()
+        endpoint = f"{drive_path}/root:/{onedrive_path}:/content"
         
         with open(local_path, 'rb') as f:
             file_content = f.read()
@@ -195,7 +213,8 @@ class OneDriveManager:
     
     def download_file(self, onedrive_path: str, local_path: str) -> bool:
         """Download a file from OneDrive"""
-        endpoint = f"/me/drive/root:/{onedrive_path}:/content"
+        drive_path = self._get_drive_path()
+        endpoint = f"{drive_path}/root:/{onedrive_path}:/content"
         
         response = self._make_request("GET", endpoint)
         
@@ -208,10 +227,11 @@ class OneDriveManager:
     
     def list_files(self, folder_path: str = "") -> List[Dict]:
         """List files in a OneDrive folder"""
+        drive_path = self._get_drive_path()
         if folder_path:
-            endpoint = f"/me/drive/root:/{folder_path}:/children"
+            endpoint = f"{drive_path}/root:/{folder_path}:/children"
         else:
-            endpoint = "/me/drive/root/children"
+            endpoint = f"{drive_path}/root/children"
         
         response = self._make_request("GET", endpoint)
         
@@ -222,7 +242,8 @@ class OneDriveManager:
     
     def delete_file(self, onedrive_path: str) -> bool:
         """Delete a file from OneDrive"""
-        endpoint = f"/me/drive/root:/{onedrive_path}"
+        drive_path = self._get_drive_path()
+        endpoint = f"{drive_path}/root:/{onedrive_path}"
         
         response = self._make_request("DELETE", endpoint)
         
@@ -230,7 +251,8 @@ class OneDriveManager:
     
     def create_share_link(self, onedrive_path: str, link_type: str = "view") -> Optional[str]:
         """Create a sharing link for a file or folder"""
-        endpoint = f"/me/drive/root:/{onedrive_path}:/createLink"
+        drive_path = self._get_drive_path()
+        endpoint = f"{drive_path}/root:/{onedrive_path}:/createLink"
         
         data = {
             "type": link_type,  # "view" or "edit"
@@ -246,7 +268,8 @@ class OneDriveManager:
     
     def get_file_metadata(self, onedrive_path: str) -> Optional[Dict]:
         """Get metadata for a file"""
-        endpoint = f"/me/drive/root:/{onedrive_path}"
+        drive_path = self._get_drive_path()
+        endpoint = f"{drive_path}/root:/{onedrive_path}"
         
         response = self._make_request("GET", endpoint)
         
@@ -255,9 +278,76 @@ class OneDriveManager:
         
         return None
     
+    def resolve_folder_id(self, folder_path: str) -> Optional[str]:
+        """Resolve folder path to folder ID for delta sync"""
+        drive_path = self._get_drive_path()
+        endpoint = f"{drive_path}/root:/{folder_path}"
+        
+        response = self._make_request("GET", endpoint)
+        
+        if response.status_code == 200:
+            return response.json().get("id")
+        
+        return None
+    
+    def get_folder_delta(self, folder_id: str, delta_token: Optional[str] = None) -> Dict:
+        """
+        Get delta changes for a folder using folder ID and delta token.
+        
+        This is the recommended approach for production sync:
+        - Use folder ID instead of path for stability
+        - Persist delta_token between syncs for incremental updates
+        - Only fetches changes since last sync
+        
+        Args:
+            folder_id: OneDrive folder ID (from resolve_folder_id)
+            delta_token: Optional delta token from previous sync
+        
+        Returns:
+            Dict with:
+                - items: List of changed items
+                - delta_token: New delta token to persist
+                - delta_link: Delta link for next sync
+        """
+        drive_path = self._get_drive_path()
+        
+        if delta_token:
+            # Use delta token for incremental sync
+            endpoint = f"{drive_path}/items/{folder_id}/delta"
+            params = {"token": delta_token}
+        else:
+            # Initial sync - get all items
+            endpoint = f"{drive_path}/items/{folder_id}/delta"
+            params = {}
+        
+        response = self._make_request("GET", endpoint, params=params)
+        
+        if response.status_code == 200:
+            data = response.json()
+            
+            # Extract delta link and token for next sync
+            delta_link = data.get("@odata.deltaLink", "")
+            new_delta_token = None
+            
+            if delta_link and "token=" in delta_link:
+                # Extract token from delta link
+                new_delta_token = delta_link.split("token=")[1].split("&")[0]
+            
+            return {
+                "items": data.get("value", []),
+                "delta_token": new_delta_token,
+                "delta_link": delta_link
+            }
+        
+        return {
+            "items": [],
+            "delta_token": None,
+            "delta_link": None
+        }
+    
     def monitor_inbox(self) -> List[Dict]:
         """Monitor the inbox folder for new files"""
-        return self.list_files("00_INBOX")
+        return self.list_files("FAS_Brain/00_INBOX")
     
     def move_file(self, source_path: str, dest_folder_path: str) -> bool:
         """Move a file from one location to another"""

@@ -193,21 +193,47 @@ class AsyncDocumentProcessor:
         update_progress(0.1, f"Initializing OneDrive sync ({mode} mode)...")
         
         try:
-            # Import OneDrive manager
+            # Import OneDrive manager and delta token store
             from onedrive_manager import OneDriveManager
+            from delta_token_store import delta_token_store
             
             # Initialize OneDrive manager
             onedrive = OneDriveManager()
             
-            # Step 1: List files in folder (20%)
-            update_progress(0.2, "Listing OneDrive files...")
+            # Step 1: Resolve folder ID and get delta token (15%)
+            update_progress(0.15, "Resolving folder ID...")
             
             # Get folder path (use default if not specified)
-            # All folders are under FAS_Brain/ root
             folder_path = folder_id or "FAS_Brain/00_INBOX"
+            scope = "inbox"  # Scope for delta token storage
             
-            # List files
-            files = onedrive.list_files(folder_path)
+            # Get or resolve folder ID
+            cached_folder_id = delta_token_store.get_folder_id(scope)
+            if not cached_folder_id:
+                cached_folder_id = onedrive.resolve_folder_id(folder_path)
+                if cached_folder_id:
+                    delta_token_store.set_folder_id(scope, cached_folder_id)
+            
+            # Step 2: Get files using delta sync if available (20%)
+            update_progress(0.2, f"Fetching files ({mode} mode)...")
+            
+            if mode == 'delta' and cached_folder_id:
+                # Use delta sync for incremental updates
+                delta_token = delta_token_store.get_token(scope)
+                delta_result = onedrive.get_folder_delta(cached_folder_id, delta_token)
+                
+                files = delta_result.get('items', [])
+                new_delta_token = delta_result.get('delta_token')
+                
+                # Persist new delta token
+                if new_delta_token:
+                    delta_token_store.set_token(scope, new_delta_token)
+                
+                # Filter out deleted items and folders
+                files = [f for f in files if 'deleted' not in f and 'folder' not in f]
+            else:
+                # Full sync - list all files
+                files = onedrive.list_files(folder_path)
             
             if not files:
                 update_progress(1.0, "No files found in OneDrive folder")
