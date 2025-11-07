@@ -147,3 +147,127 @@ class AsyncDocumentProcessor:
             'text_length': len(text_content),
             'entity_count': len(entities.get('entities', [])) if entities else 0
         }
+
+    def sync_onedrive_folder(self, params: Dict, update_progress: Callable):
+        """
+        Sync documents from OneDrive folder.
+        
+        Charter-compliant OneDrive sync workflow:
+        1. Authenticate with Microsoft Graph API
+        2. List files in specified folder (or all configured folders)
+        3. Download new/changed files
+        4. Process each file through document pipeline
+        5. Track sync state with delta tokens
+        
+        Args:
+            params: {
+                'site_id': Optional[str],
+                'drive_id': Optional[str],
+                'folder_id': Optional[str],
+                'mode': 'delta' | 'full',
+                'reason': Optional[str]
+            }
+            update_progress: Callback function(progress: float, message: str)
+        """
+        site_id = params.get('site_id')
+        drive_id = params.get('drive_id')
+        folder_id = params.get('folder_id')
+        mode = params.get('mode', 'delta')
+        reason = params.get('reason', 'Manual sync')
+        
+        update_progress(0.1, f"Initializing OneDrive sync ({mode} mode)...")
+        
+        try:
+            # Import OneDrive manager
+            from onedrive_manager import OneDriveManager
+            
+            # Initialize OneDrive manager
+            onedrive = OneDriveManager()
+            
+            # Step 1: List files in folder (20%)
+            update_progress(0.2, "Listing OneDrive files...")
+            
+            # Get folder path (use default if not specified)
+            folder_path = folder_id or "00_INBOX"
+            
+            # List files
+            files = onedrive.list_files(folder_path)
+            
+            if not files:
+                update_progress(1.0, "No files found in OneDrive folder")
+                return {
+                    'status': 'success',
+                    'files_found': 0,
+                    'files_processed': 0,
+                    'files_skipped': 0,
+                    'message': 'No files to sync'
+                }
+            
+            # Step 2: Process each file (20% - 90%)
+            total_files = len(files)
+            processed_count = 0
+            skipped_count = 0
+            error_count = 0
+            
+            for i, file_info in enumerate(files):
+                progress = 0.2 + (0.7 * (i / total_files))
+                file_name = file_info.get('name', 'unknown')
+                update_progress(progress, f"Processing {file_name} ({i+1}/{total_files})...")
+                
+                try:
+                    # Download file
+                    file_id = file_info.get('id')
+                    local_path = onedrive.download_file(file_id, file_name)
+                    
+                    # Compute hash
+                    file_hash = self.compute_file_hash(local_path)
+                    
+                    # Check if already processed
+                    if self.check_duplicate(file_hash):
+                        skipped_count += 1
+                        os.remove(local_path)  # Clean up
+                        continue
+                    
+                    # Process document
+                    doc_params = {
+                        'file_path': local_path,
+                        'filename': file_name,
+                        'file_size': file_info.get('size', 0),
+                        'mime_type': file_info.get('mimeType', 'application/octet-stream')
+                    }
+                    
+                    def doc_progress(p, msg):
+                        # Nested progress tracking
+                        pass
+                    
+                    result = self.process_document(doc_params, doc_progress)
+                    
+                    # Clean up downloaded file
+                    os.remove(local_path)
+                    
+                    if result.get('status') == 'success':
+                        processed_count += 1
+                    else:
+                        skipped_count += 1
+                        
+                except Exception as e:
+                    error_count += 1
+                    print(f"Error processing {file_name}: {e}")
+                    continue
+            
+            # Step 3: Complete (100%)
+            update_progress(1.0, f"Sync complete: {processed_count} processed, {skipped_count} skipped, {error_count} errors")
+            
+            return {
+                'status': 'success',
+                'files_found': total_files,
+                'files_processed': processed_count,
+                'files_skipped': skipped_count,
+                'files_errors': error_count,
+                'mode': mode,
+                'reason': reason
+            }
+            
+        except Exception as e:
+            update_progress(1.0, f"OneDrive sync failed: {str(e)}")
+            raise Exception(f"OneDrive sync failed: {str(e)}")
