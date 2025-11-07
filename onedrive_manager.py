@@ -24,7 +24,8 @@ class OneDriveManager:
         self.refresh_token = None
         self.token_expiry = None
         
-        # OneDrive folder structure
+        # OneDrive folder structure - all under FAS_Brain/ to avoid root clutter
+        self.root_folder = "FAS_Brain"
         self.folder_structure = {
             "00_INBOX": "Hot folder for new documents",
             "01_BY_CASE": {
@@ -157,16 +158,20 @@ class OneDriveManager:
     def create_folder_structure(self) -> bool:
         """Create the complete FAS Brain folder structure in OneDrive"""
         try:
-            # Create root folders
+            # Create root FAS_Brain folder first
+            self.create_folder("", self.root_folder)
+            
+            # Create subfolders under FAS_Brain/
             for folder_name, description in self.folder_structure.items():
                 if isinstance(description, str):
-                    # Simple folder
-                    self.create_folder("", folder_name)
+                    # Simple folder under FAS_Brain/
+                    self.create_folder(self.root_folder, folder_name)
                 elif isinstance(description, dict):
-                    # Folder with subfolders
-                    self.create_folder("", folder_name)
+                    # Folder with subfolders under FAS_Brain/
+                    self.create_folder(self.root_folder, folder_name)
+                    parent_path = f"{self.root_folder}/{folder_name}"
                     for subfolder_name in description.keys():
-                        self.create_folder(folder_name, subfolder_name)
+                        self.create_folder(parent_path, subfolder_name)
             
             return True
         except Exception as e:

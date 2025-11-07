@@ -188,7 +188,8 @@ class AsyncDocumentProcessor:
             update_progress(0.2, "Listing OneDrive files...")
             
             # Get folder path (use default if not specified)
-            folder_path = folder_id or "00_INBOX"
+            # All folders are under FAS_Brain/ root
+            folder_path = folder_id or "FAS_Brain/00_INBOX"
             
             # List files
             files = onedrive.list_files(folder_path)
