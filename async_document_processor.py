@@ -83,7 +83,10 @@ class AsyncDocumentProcessor:
             
         # Step 2: Extract text (30%)
         update_progress(0.3, "Extracting text...")
-        text_content = self.processor.extract_text(file_path)
+        # Use the extractor directly
+        from text_extractor import TextExtractor
+        extractor = TextExtractor()
+        text_content = extractor.extract(file_path)
         
         if not text_content or len(text_content.strip()) == 0:
             raise Exception("Failed to extract text from document")
