@@ -11,6 +11,8 @@ from supabase import create_client, Client
 
 from document_processor import DocumentProcessor
 from entity_manager import EntityManager
+from document_router import document_router
+from routing_config import routing_config
 
 
 class AsyncDocumentProcessor:
@@ -130,6 +132,19 @@ class AsyncDocumentProcessor:
                         'locations': entities.get('locations', [])
                     }
                     self.supabase.table("document_metadata").insert(entity_data).execute()
+                
+                # Store routing decisions if provided
+                if params.get('routing_decisions'):
+                    routing_data = {
+                        'document_id': document_id,
+                        'routing_decisions': params['routing_decisions'],
+                        'audit_record': params.get('audit_record', {})
+                    }
+                    # Store in document_metadata or separate routing table
+                    # For now, update document record
+                    self.supabase.table("documents").update({
+                        'routing_decisions': params['routing_decisions']
+                    }).eq('id', document_id).execute()
                     
             except Exception as e:
                 raise Exception(f"Failed to store document in database: {str(e)}")
@@ -242,6 +257,54 @@ class AsyncDocumentProcessor:
                         pass
                     
                     result = self.process_document(doc_params, doc_progress)
+                    
+                    # If processing succeeded, handle routing and vault
+                    if result.get('status') == 'success':
+                        # Get document text and entities for routing
+                        doc_id = result.get('document_id')
+                        
+                        # Fetch document from database to get text and entities
+                        if self.supabase and doc_id:
+                            try:
+                                doc_data = self.supabase.table('documents').select('text_content').eq('id', doc_id).single().execute()
+                                metadata_data = self.supabase.table('document_metadata').select('*').eq('document_id', doc_id).single().execute()
+                                
+                                text_content = doc_data.data.get('text_content', '')
+                                entities = metadata_data.data if metadata_data.data else {}
+                                
+                                # Score and route document
+                                routing_decisions = document_router.get_primary_routes(text_content, entities, max_routes=3)
+                                
+                                # Copy to routing folders
+                                for category, paths in routing_decisions.items():
+                                    for path in paths:
+                                        try:
+                                            onedrive.upload_file(local_path, f"{path}/{file_name}")
+                                        except Exception as e:
+                                            print(f"Failed to route to {path}: {e}")
+                                
+                                # Archive to vault
+                                from onedrive_vault import OneDriveVault
+                                vault = OneDriveVault(onedrive)
+                                vault_result = vault.archive_to_vault(
+                                    local_path,
+                                    file_name,
+                                    file_hash,
+                                    metadata={
+                                        'document_id': doc_id,
+                                        'routing_decisions': routing_decisions,
+                                        'source': 'onedrive_inbox'
+                                    }
+                                )
+                                
+                                # Update document with routing info
+                                self.supabase.table('documents').update({
+                                    'routing_decisions': routing_decisions,
+                                    'vault_path': vault_result.get('vault_path')
+                                }).eq('id', doc_id).execute()
+                                
+                            except Exception as e:
+                                print(f"Routing/vault error for {file_name}: {e}")
                     
                     # Clean up downloaded file
                     os.remove(local_path)
