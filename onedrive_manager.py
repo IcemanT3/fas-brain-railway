@@ -15,7 +15,10 @@ class OneDriveManager:
         self.client_id = os.getenv("MICROSOFT_CLIENT_ID")
         self.client_secret = os.getenv("MICROSOFT_CLIENT_SECRET")
         self.tenant_id = os.getenv("MICROSOFT_TENANT_ID")
-        self.redirect_uri = os.getenv("MICROSOFT_REDIRECT_URI", "http://localhost:8000/auth/callback")
+        self.redirect_uri = os.getenv("MICROSOFT_REDIRECT_URI", "https://fas-brain-railway-production.up.railway.app/auth/callback")
+        
+        if not all([self.client_id, self.client_secret, self.tenant_id]):
+            print("WARNING: Microsoft credentials not configured. OneDrive features will be disabled.")
         
         self.access_token = None
         self.refresh_token = None
@@ -48,6 +51,8 @@ class OneDriveManager:
     
     def get_auth_url(self) -> str:
         """Generate OAuth authorization URL"""
+        if not all([self.client_id, self.client_secret, self.tenant_id]):
+            raise ValueError("Microsoft credentials not configured. Please set MICROSOFT_CLIENT_ID, MICROSOFT_CLIENT_SECRET, and MICROSOFT_TENANT_ID environment variables.")
         auth_url = f"https://login.microsoftonline.com/{self.tenant_id}/oauth2/v2.0/authorize"
         params = {
             "client_id": self.client_id,
