@@ -27,6 +27,10 @@ def add_contract_compliance(app, job_queue, async_processor):
     - GET /api/jobs/{job_id} (beta)
     """
     
+    # Register OneDrive sync handler
+    job_queue.register_handler('onedrive_sync', async_processor.sync_onedrive_folder)
+    logger.info("✅ Registered onedrive_sync handler")
+    
     # Set service dependencies for contract routes
     set_services(job_queue, async_processor)
     

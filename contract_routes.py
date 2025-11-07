@@ -45,9 +45,10 @@ async def enqueue_onedrive_sync(site_id=None, drive_id=None, folder_id=None, mod
     if not _job_queue or not _async_processor:
         raise HTTPException(500, "Sync service not initialized")
     
+    # JobQueue.enqueue signature: (job_type: str, params: Dict) -> str
+    # Handler must be registered separately via register_handler()
     job_id = _job_queue.enqueue(
         job_type="onedrive_sync",
-        handler=_async_processor.sync_onedrive_folder,
         params={
             "site_id": site_id,
             "drive_id": drive_id,
