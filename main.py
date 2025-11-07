@@ -67,6 +67,10 @@ async_processor = AsyncDocumentProcessor()
 job_queue.register_handler('process_document', async_processor.process_document)
 job_queue.start_workers(num_workers=3)
 
+# Add charter-compliant API contract routes
+from add_contract_routes import add_contract_compliance
+add_contract_compliance(app, job_queue, async_processor)
+
 
 # Pydantic models for request/response
 class SearchRequest(BaseModel):
