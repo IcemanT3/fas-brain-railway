@@ -38,6 +38,8 @@ from entity_manager import EntityManager
 from hybrid_search import hybrid_search
 from deduplicator import deduplicator
 from admin_console import admin_console
+from job_queue import job_queue, JobStatus
+from async_document_processor import AsyncDocumentProcessor
 
 # Initialize FastAPI
 app = FastAPI(
@@ -59,6 +61,11 @@ app.add_middleware(
 processor = DocumentProcessor()
 search_engine = SearchEngine()
 entity_manager = EntityManager()
+async_processor = AsyncDocumentProcessor()
+
+# Register job handlers and start workers
+job_queue.register_handler('process_document', async_processor.process_document)
+job_queue.start_workers(num_workers=3)
 
 
 # Pydantic models for request/response
@@ -117,48 +124,58 @@ async def health_check():
 
 
 # Document endpoints
-@app.post("/api/documents/upload", response_model=DocumentResponse)
-async def upload_document(
-    file: UploadFile = File(...),
-    document_type: Optional[str] = Form(None),
-    sub_category: Optional[str] = Form(None)
+@app.post("/api/documents/upload")
+async def upload_document_async(
+    file: UploadFile = File(...)
 ):
     """
-    Upload and process a document
+    Async document upload - returns immediately with job_id.
+    Client should poll /api/jobs/{job_id} for status.
     
-    - Extracts text
-    - Categorizes document
-    - Generates embeddings
-    - Extracts entities
+    Implements charter-defined ingestion workflow:
+    1. Save file temporarily
+    2. Enqueue background job
+    3. Return job_id immediately
     """
     try:
-        # Save uploaded file temporarily
-        temp_path = f"/tmp/{file.filename}"
+        # Save uploaded file to temp directory
+        import uuid
+        temp_id = str(uuid.uuid4())
+        temp_dir = "/tmp/uploads"
+        os.makedirs(temp_dir, exist_ok=True)
+        temp_path = f"{temp_dir}/{temp_id}_{file.filename}"
+        
         with open(temp_path, "wb") as f:
             content = await file.read()
             f.write(content)
+            
+        # Enqueue processing job
+        job_params = {
+            'file_path': temp_path,
+            'filename': file.filename,
+            'file_size': len(content),
+            'mime_type': file.content_type or 'application/octet-stream'
+        }
         
-        # Process document
-        result = processor.process(
-            temp_path,
-            manual_category=document_type,
-            manual_sub_category=sub_category
-        )
+        try:
+            job_id = job_queue.enqueue('process_document', job_params)
+        except Exception as e:
+            # Queue full - return 429
+            os.remove(temp_path)
+            raise HTTPException(
+                status_code=429,
+                detail="Job queue is full - please try again later"
+            )
+            
+        return {
+            'job_id': job_id,
+            'filename': file.filename,
+            'status': 'queued',
+            'message': 'Document queued for processing. Check /api/jobs/{job_id} for status.'
+        }
         
-        # Clean up temp file
-        os.remove(temp_path)
-        
-        if not result:
-            raise HTTPException(status_code=500, detail="Document processing failed")
-        
-        return DocumentResponse(
-            document_id=result['document_id'],
-            filename=result['filename'],
-            document_type=result['document_type'],
-            status="processed",
-            entities=result.get('entities', [])
-        )
-    
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -212,6 +229,52 @@ async def delete_document(document_id: str):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# Job status endpoints
+@app.get("/api/jobs/{job_id}")
+async def get_job_status(job_id: str):
+    """
+    Get status of a background job.
+    
+    Returns:
+        - status: QUEUED | RUNNING | DONE | ERROR
+        - progress: 0.0 to 1.0
+        - progress_message: Current step description
+        - result: Final result if DONE
+        - error: Error message if ERROR
+    """
+    job = job_queue.get_status(job_id)
+    
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+        
+    return {
+        'job_id': job.id,
+        'type': job.type,
+        'status': job.status,
+        'progress': job.progress,
+        'progress_message': job.progress_message,
+        'created_at': job.created_at.isoformat(),
+        'started_at': job.started_at.isoformat() if job.started_at else None,
+        'completed_at': job.completed_at.isoformat() if job.completed_at else None,
+        'result': job.result,
+        'error': job.error
+    }
+
+
+@app.get("/api/jobs")
+async def get_queue_stats():
+    """
+    Get job queue statistics.
+    Useful for monitoring and backpressure visibility.
+    """
+    return {
+        'queue_depth': job_queue.get_queue_depth(),
+        'running_count': job_queue.get_running_count(),
+        'max_queue_size': job_queue.max_queue_size,
+        'max_concurrent': job_queue.max_concurrent
+    }
 
 
 # Search endpoints
