@@ -13,6 +13,22 @@ import os
 import sys
 from pathlib import Path
 
+# === Charter Verification ===
+# Verify charter before any other imports or initialization
+try:
+    from charter_verify import verify_charter
+except ImportError:
+    print("❌ Charter verification module not found (charter_verify.py missing).")
+    sys.exit(1)
+
+# === Step 1: Verify Charter Before Boot ===
+try:
+    charter_info = verify_charter()
+    print(f"✅ Charter OK • {charter_info['project']} • hash={charter_info['hash']} • Phase: {charter_info.get('phase')}")
+except Exception as e:
+    print(f"❌ Charter verification failed: {e}")
+    sys.exit(1)
+
 # Import our existing modules
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -82,10 +98,16 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    """Detailed health check"""
+    """Detailed health check with charter verification"""
     return {
         "status": "healthy",
         "database": "connected",
+        "charter": {
+            "project": charter_info["project"],
+            "hash": charter_info["hash"],
+            "phase": charter_info.get("phase", "Phase1"),
+            "enforced": True
+        },
         "services": {
             "processor": "ready",
             "search": "ready",
