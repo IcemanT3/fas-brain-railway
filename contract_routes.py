@@ -1,237 +1,148 @@
 """
 Charter-Compliant API Contract Routes
 
-These routes implement the API contract defined in the project charter.
-They forward requests to the underlying async job queue system.
-
-Contract routes (charter-compliant):
-- POST /sources/onedrive/sync - Trigger OneDrive folder sync
-- GET /admin/jobs/{job_id} - Check job status
-
-Beta routes (for testing, not in contract):
-- POST /api/documents/upload - Direct document upload
-- GET /api/jobs/{job_id} - Job status (beta path)
+This module implements the official API contract defined in the project charter.
+These routes are stable, documented, and guaranteed to remain compatible.
 """
 
-from fastapi import APIRouter, HTTPException, UploadFile, File
-from pydantic import BaseModel
-from typing import Optional, Dict, Any
+from fastapi import APIRouter, HTTPException, status
+from pydantic import BaseModel, Field
+from typing import Optional, Literal
 import logging
 
 logger = logging.getLogger(__name__)
 
-# Contract-compliant router
-contract_router = APIRouter(tags=["Contract API"])
+router = APIRouter(tags=["Charter Contract"])
 
-# Beta router
-beta_router = APIRouter(tags=["Beta API"])
-
-
+# ---- Contract payloads ----
 class OneDriveSyncRequest(BaseModel):
-    """Request to sync a OneDrive folder"""
-    folder_path: Optional[str] = None  # If None, sync all configured folders
-    recursive: bool = True
-    deduplicate: bool = True
-
+    site_id: Optional[str] = Field(None, description="SharePoint site id (optional if default configured)")
+    drive_id: Optional[str] = Field(None, description="Drive id (optional if default configured)")
+    folder_id: Optional[str] = Field(None, description="Folder id/path to sync")
+    mode: Literal["full","delta"] = Field("delta", description="delta = resume with token; full = rescan")
+    reason: Optional[str] = Field(None, description="Audit note for who/why triggered")
 
 class JobStatusResponse(BaseModel):
-    """Standard job status response"""
     job_id: str
-    type: str
-    status: str  # QUEUED, RUNNING, DONE, ERROR
-    progress: float  # 0.0 to 1.0
-    progress_message: str
-    result: Optional[Dict[str, Any]] = None
-    error: Optional[str] = None
+    status: Literal["QUEUED","RUNNING","DONE","ERROR"]
+    progress: int
+    message: Optional[str] = None
 
+# ---- Internal adapters (will be set by main.py) ----
+_job_queue = None
+_async_processor = None
 
-# Global reference to job queue (will be set by main.py)
-job_queue = None
-async_processor = None
+def set_services(job_queue, async_processor):
+    """Set internal service references"""
+    global _job_queue, _async_processor
+    _job_queue = job_queue
+    _async_processor = async_processor
+    logger.info("✅ Contract routes services initialized")
 
+# ---- Helper functions ----
+async def enqueue_onedrive_sync(site_id=None, drive_id=None, folder_id=None, mode="delta", reason=None):
+    """Enqueue OneDrive sync job and return job_id"""
+    if not _job_queue or not _async_processor:
+        raise HTTPException(500, "Sync service not initialized")
+    
+    job_id = _job_queue.enqueue(
+        job_type="onedrive_sync",
+        handler=_async_processor.sync_onedrive_folder,
+        params={
+            "site_id": site_id,
+            "drive_id": drive_id,
+            "folder_id": folder_id,
+            "mode": mode,
+            "reason": reason
+        }
+    )
+    logger.info(f"[CONTRACT] OneDrive sync enqueued: {job_id} (mode={mode}, reason={reason})")
+    return job_id
 
-def set_dependencies(queue, processor):
-    """Set job queue and processor references"""
-    global job_queue, async_processor
-    job_queue = queue
-    async_processor = processor
+async def get_job(job_id: str):
+    """Get job status from queue"""
+    if not _job_queue:
+        raise HTTPException(500, "Job service not initialized")
+    
+    job = _job_queue.get_status(job_id)
+    if not job:
+        return None
+    
+    # Convert to contract format
+    class JobInfo:
+        def __init__(self, job):
+            self.id = job.id
+            self.status = job.status
+            self.progress = int(job.progress * 100)  # Convert 0.0-1.0 to 0-100
+            self.message = job.progress_message
+    
+    return JobInfo(job)
 
+# ---- Charter-compliant endpoints ----
 
-# ============================================================================
-# CONTRACT-COMPLIANT ROUTES (Charter API)
-# ============================================================================
-
-@contract_router.post("/sources/onedrive/sync")
-async def onedrive_sync(request: OneDriveSyncRequest):
+@router.post("/sources/onedrive/sync", status_code=status.HTTP_202_ACCEPTED)
+async def onedrive_sync(req: OneDriveSyncRequest):
     """
-    **CONTRACT ROUTE** - Trigger OneDrive folder synchronization
+    **CONTRACT ROUTE** - Trigger manual OneDrive folder ingestion
     
     This endpoint implements the charter API contract for OneDrive integration.
-    It enqueues a background job to sync documents from OneDrive.
+    It enqueues a background job to sync documents from OneDrive/SharePoint.
     
-    Returns:
+    Request:
+        - site_id: SharePoint site (optional if default configured)
+        - drive_id: Drive ID (optional if default configured)
+        - folder_id: Folder path to sync (null = sync all)
+        - mode: "delta" (incremental) or "full" (rescan)
+        - reason: Audit note for who/why triggered
+    
+    Response:
         - status: "accepted"
         - job_id: UUID to track sync progress
         
     Use GET /admin/jobs/{job_id} to check status.
     """
-    if not job_queue or not async_processor:
-        raise HTTPException(500, "Job queue not initialized")
-    
     try:
-        # Enqueue OneDrive sync job
-        job_id = job_queue.enqueue(
-            job_type="onedrive_sync",
-            handler=async_processor.sync_onedrive_folder,
-            params={
-                "folder_path": request.folder_path,
-                "recursive": request.recursive,
-                "deduplicate": request.deduplicate
-            }
+        job_id = await enqueue_onedrive_sync(
+            site_id=req.site_id,
+            drive_id=req.drive_id,
+            folder_id=req.folder_id,
+            mode=req.mode,
+            reason=req.reason
         )
-        
-        logger.info(f"OneDrive sync job enqueued: {job_id}")
-        
-        return {
-            "status": "accepted",
-            "job_id": job_id,
-            "message": "OneDrive sync job queued. Check /admin/jobs/{job_id} for status."
-        }
-        
+        return {"status": "accepted", "job_id": job_id}
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Failed to enqueue OneDrive sync: {e}")
-        raise HTTPException(500, f"Failed to enqueue sync job: {str(e)}")
+        logger.error(f"[CONTRACT] OneDrive sync failed: {e}")
+        raise HTTPException(500, f"Failed to enqueue sync: {str(e)}")
 
-
-@contract_router.get("/admin/jobs/{job_id}")
-async def get_job_status_admin(job_id: str) -> JobStatusResponse:
+@router.get("/admin/jobs/{job_id}", response_model=JobStatusResponse)
+async def job_status(job_id: str):
     """
-    **CONTRACT ROUTE** - Get job status (admin namespace)
+    **CONTRACT ROUTE** - Standardized job status endpoint
     
     This endpoint implements the charter API contract for job monitoring.
     It returns the current status and progress of any background job.
     
-    Returns:
+    Response:
         - job_id: Job identifier
-        - type: Job type (process_document, onedrive_sync, etc.)
         - status: QUEUED | RUNNING | DONE | ERROR
-        - progress: 0.0 to 1.0
-        - progress_message: Human-readable status
-        - result: Job result (when DONE)
-        - error: Error message (when ERROR)
+        - progress: 0-100 (percentage complete)
+        - message: Human-readable status message
     """
-    if not job_queue:
-        raise HTTPException(500, "Job queue not initialized")
-    
-    job = job_queue.get_job(job_id)
-    if not job:
-        raise HTTPException(404, "Job not found")
-    
-    return JobStatusResponse(
-        job_id=job.job_id,
-        type=job.job_type,
-        status=job.status,
-        progress=job.progress,
-        progress_message=job.progress_message,
-        result=job.result,
-        error=job.error
-    )
-
-
-# ============================================================================
-# BETA ROUTES (Testing/Development - Not in Charter Contract)
-# ============================================================================
-
-@beta_router.post("/api/documents/upload")
-async def upload_document_beta(file: UploadFile = File(...)):
-    """
-    **BETA ROUTE** - Direct document upload (async)
-    
-    This is a beta endpoint for testing async document processing.
-    For production, use the charter-compliant OneDrive sync workflow.
-    
-    Returns immediately with job_id. Document is processed in background.
-    """
-    if not job_queue or not async_processor:
-        raise HTTPException(500, "Job queue not initialized")
-    
-    # Check queue capacity
-    stats = job_queue.get_stats()
-    if stats["queue_depth"] >= stats["max_queue_size"]:
-        raise HTTPException(429, "Queue full. Try again later.")
-    
     try:
-        # Save uploaded file
-        import os
-        import uuid
-        upload_dir = "/tmp/uploads"
-        os.makedirs(upload_dir, exist_ok=True)
+        j = await get_job(job_id)
+        if not j:
+            raise HTTPException(404, "Job not found")
         
-        file_id = str(uuid.uuid4())
-        file_path = os.path.join(upload_dir, f"{file_id}_{file.filename}")
-        
-        with open(file_path, "wb") as f:
-            content = await file.read()
-            f.write(content)
-        
-        # Enqueue processing job
-        job_id = job_queue.enqueue(
-            job_type="process_document",
-            handler=async_processor.process_document,
-            params={"file_path": file_path, "filename": file.filename}
+        return JobStatusResponse(
+            job_id=j.id,
+            status=j.status,
+            progress=j.progress,
+            message=j.message
         )
-        
-        logger.info(f"Document upload queued: {file.filename} -> {job_id}")
-        
-        return {
-            "job_id": job_id,
-            "filename": file.filename,
-            "status": "queued",
-            "message": "Document queued for processing. Check /api/jobs/{job_id} for status."
-        }
-        
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Upload failed: {e}")
-        raise HTTPException(500, f"Upload failed: {str(e)}")
-
-
-@beta_router.get("/api/jobs/{job_id}")
-async def get_job_status_beta(job_id: str):
-    """
-    **BETA ROUTE** - Get job status (beta namespace)
-    
-    Same as /admin/jobs/{job_id} but in beta namespace.
-    Use the admin endpoint for production.
-    """
-    if not job_queue:
-        raise HTTPException(500, "Job queue not initialized")
-    
-    job = job_queue.get_job(job_id)
-    if not job:
-        raise HTTPException(404, "Job not found")
-    
-    return {
-        "job_id": job.job_id,
-        "type": job.job_type,
-        "status": job.status,
-        "progress": job.progress,
-        "progress_message": job.progress_message,
-        "created_at": job.created_at.isoformat() if job.created_at else None,
-        "started_at": job.started_at.isoformat() if job.started_at else None,
-        "completed_at": job.completed_at.isoformat() if job.completed_at else None,
-        "result": job.result,
-        "error": job.error
-    }
-
-
-@beta_router.get("/api/jobs")
-async def get_queue_stats_beta():
-    """
-    **BETA ROUTE** - Get queue statistics
-    
-    Returns current queue depth, running jobs, and capacity limits.
-    """
-    if not job_queue:
-        raise HTTPException(500, "Job queue not initialized")
-    
-    return job_queue.get_stats()
+        logger.error(f"[CONTRACT] Job status failed: {e}")
+        raise HTTPException(500, f"Failed to get job status: {str(e)}")
