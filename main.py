@@ -40,6 +40,7 @@ from deduplicator import deduplicator
 from admin_console import admin_console
 from job_queue import job_queue, JobStatus
 from async_document_processor import AsyncDocumentProcessor
+from case_routes import router as case_router
 
 # Initialize FastAPI
 app = FastAPI(
@@ -67,9 +68,12 @@ async_processor = AsyncDocumentProcessor()
 job_queue.register_handler('process_document', async_processor.process_document)
 job_queue.start_workers(num_workers=3)
 
-# Add charter-compliant API contract routes
-from add_contract_routes import add_contract_compliance
-add_contract_compliance(app, job_queue, async_processor)
+# Add contract routes
+from add_contract_routes import add_contract_routes
+add_contract_routes(app)
+
+# Add case management routes
+app.include_router(case_router)
 
 
 # Pydantic models for request/response
