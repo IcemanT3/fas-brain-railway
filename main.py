@@ -69,8 +69,8 @@ job_queue.register_handler('process_document', async_processor.process_document)
 job_queue.start_workers(num_workers=3)
 
 # Add contract routes
-from add_contract_routes import add_contract_routes
-add_contract_routes(app)
+from add_contract_routes import add_contract_compliance
+add_contract_compliance(app, job_queue, async_processor)
 
 # Add case management routes
 app.include_router(case_router)
