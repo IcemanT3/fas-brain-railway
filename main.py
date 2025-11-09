@@ -21,15 +21,38 @@ if miss:
     sys.exit(1)
 print("✅ All required environment variables present")
 
-# === Charter Verification ===
-# Verify charter before any other imports or initialization
+# === Initialize FastAPI FIRST (before charter verification) ===
+app = FastAPI(
+    title="FAS Brain API",
+    description="Legal Document Research System with AI-powered search and entity extraction",
+    version="1.0.0"
+)
+
+# === Register Routers IMMEDIATELY (import-safe, no side effects) ===
+sys.path.insert(0, str(Path(__file__).parent))
+
+# Import router objects only - these imports MUST be side-effect free
+try:
+    from case_routes import router as case_router
+    app.include_router(case_router)
+    print("✅ Registered case_router")
+except Exception as e:
+    print(f"⚠️  Failed to register case_router: {e}")
+
+try:
+    from onedrive_routes import router as onedrive_router
+    app.include_router(onedrive_router)
+    print("✅ Registered onedrive_router")
+except Exception as e:
+    print(f"⚠️  Failed to register onedrive_router: {e}")
+
+# === Charter Verification (can exit, but after routes are mounted) ===
 try:
     from charter_verify import verify_charter
 except ImportError:
     print("❌ Charter verification module not found (charter_verify.py missing).")
     sys.exit(1)
 
-# === Step 1: Verify Charter Before Boot ===
 try:
     charter_info = verify_charter()
     print(f"✅ Charter OK • {charter_info['project']} • hash={charter_info['hash']} • Phase: {charter_info.get('phase')}")
@@ -37,9 +60,7 @@ except Exception as e:
     print(f"❌ Charter verification failed: {e}")
     sys.exit(1)
 
-# Import our existing modules
-sys.path.insert(0, str(Path(__file__).parent))
-
+# === Import and initialize services (after charter verification) ===
 from document_processor import DocumentProcessor
 from search_engine import SearchEngine
 from entity_manager import EntityManager
@@ -48,19 +69,11 @@ from deduplicator import deduplicator
 from admin_console import admin_console
 from job_queue import job_queue, JobStatus
 from async_document_processor import AsyncDocumentProcessor
-from case_routes import router as case_router
 
-# Initialize FastAPI
-app = FastAPI(
-    title="FAS Brain API",
-    description="Legal Document Research System with AI-powered search and entity extraction",
-    version="1.0.0"
-)
-
-# CORS middleware - allow frontend to call API
+# CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify your frontend domain
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -80,8 +93,14 @@ job_queue.start_workers(num_workers=3)
 from add_contract_routes import add_contract_compliance
 add_contract_compliance(app, job_queue, async_processor)
 
-# Add case management routes
-app.include_router(case_router)
+# === Route Table Printout (for debugging) ===
+print("\n=== Registered Routes ===")
+for route in app.routes:
+    path = getattr(route, 'path', None)
+    methods = getattr(route, 'methods', None)
+    if path and methods:
+        print(f"ROUTE {methods} {path}")
+print("========================\n")
 
 
 # Pydantic models for request/response
@@ -121,7 +140,15 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    """Detailed health check with charter verification"""
+    """Detailed health check with charter verification and route listing"""
+    # Collect registered routes
+    routes = []
+    for route in app.routes:
+        path = getattr(route, 'path', None)
+        methods = getattr(route, 'methods', None)
+        if path and methods and path not in ["/openapi.json", "/docs", "/redoc"]:
+            routes.append(f"{list(methods)[0]} {path}")
+    
     return {
         "status": "healthy",
         "database": "connected",
@@ -129,13 +156,15 @@ async def health_check():
             "project": charter_info["project"],
             "hash": charter_info["hash"],
             "phase": charter_info.get("phase", "Phase1"),
-            "enforced": True
+            "enforced": True,
+            "charter_verified": True
         },
         "services": {
             "processor": "ready",
             "search": "ready",
             "entities": "ready"
-        }
+        },
+        "routes": sorted(routes)[:20]  # First 20 routes for brevity
     }
 
 
@@ -524,136 +553,6 @@ async def get_health_dashboard():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
-# OneDrive Integration
-from onedrive_manager import OneDriveManager
-from document_organizer import DocumentOrganizer
-from case_package_generator import CasePackageGenerator
-
-# Don't initialize at startup - create instances per request
-# onedrive = OneDriveManager()  # Removed - causes 404s if init fails
-organizer = DocumentOrganizer()
-package_generator = CasePackageGenerator(processor.supabase)
-
-
-@app.get("/api/onedrive/auth-url")
-async def get_onedrive_auth_url():
-    """Get OneDrive OAuth authorization URL"""
-    try:
-        onedrive = OneDriveManager()  # Create instance per request
-        auth_url = onedrive.get_auth_url()
-        return {"auth_url": auth_url}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/auth/callback")
-async def onedrive_callback(code: str):
-    """Handle OneDrive OAuth callback"""
-    try:
-        onedrive = OneDriveManager()  # Create instance per request
-        success = onedrive.exchange_code_for_token(code)
-        if success:
-            # Create folder structure
-            onedrive.create_folder_structure()
-            return {"status": "success", "message": "OneDrive connected successfully"}
-        else:
-            raise HTTPException(status_code=400, detail="Failed to exchange code for token")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/onedrive/process-inbox")
-async def process_inbox():
-    """
-    Process all documents in the OneDrive inbox
-    - Analyze each document
-    - Organize into appropriate folders
-    - Update Supabase database
-    - Generate case packages
-    """
-    try:
-        onedrive = OneDriveManager()  # Create instance per request
-        # Get files from inbox
-        inbox_files = onedrive.monitor_inbox()
-        
-        results = []
-        for file_info in inbox_files:
-            filename = file_info["name"]
-            
-            # Download file
-            temp_path = f"/tmp/{filename}"
-            onedrive.download_file(f"00_INBOX/{filename}", temp_path)
-            
-            # Extract text
-            full_text = processor.extractor.extract(temp_path)
-            
-            # Organize document
-            org_result = organizer.organize_document(filename, full_text, onedrive)
-            
-            # Process in Supabase (with organization metadata)
-            proc_result = processor.process(
-                temp_path,
-                manual_category=org_result["analysis"].get("document_type")
-            )
-            
-            # Update document with organization metadata
-            processor.supabase.table("documents").update({
-                "metadata": {
-                    **proc_result.get("metadata", {}),
-                    "analysis": org_result["analysis"],
-                    "organization_paths": org_result["paths"]
-                }
-            }).eq("id", proc_result["document_id"]).execute()
-            
-            results.append({
-                "filename": filename,
-                "document_id": proc_result["document_id"],
-                "organization": org_result,
-                "success": org_result["success"]
-            })
-            
-            # Clean up
-            os.remove(temp_path)
-        
-        # Generate updated case packages
-        packages = package_generator.generate_all_case_packages()
-        for case_name, package_content in packages.items():
-            package_generator.save_package_to_onedrive(case_name, package_content, onedrive)
-        
-        return {
-            "processed": len(results),
-            "results": results,
-            "case_packages_updated": len(packages)
-        }
-    
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/api/onedrive/folders")
-async def list_onedrive_folders(folder_path: str = ""):
-    """List files in a OneDrive folder"""
-    try:
-        onedrive = OneDriveManager()  # Create instance per request
-        files = onedrive.list_files(folder_path)
-        return {"files": files, "folder": folder_path}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/onedrive/share")
-async def create_share_link(folder_path: str, link_type: str = "view"):
-    """Create a sharing link for a OneDrive folder"""
-    try:
-        onedrive = OneDriveManager()  # Create instance per request
-        share_link = onedrive.create_share_link(folder_path, link_type)
-        if share_link:
-            return {"share_link": share_link, "folder": folder_path}
-        else:
-            raise HTTPException(status_code=400, detail="Failed to create share link")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn
