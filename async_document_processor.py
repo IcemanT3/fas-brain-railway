@@ -200,6 +200,36 @@ class AsyncDocumentProcessor:
             # Initialize OneDrive manager
             onedrive = OneDriveManager()
             
+            # Handle init mode: create folder structure only
+            if mode == 'init':
+                update_progress(0.2, "Creating OneDrive folder structure...")
+                result = onedrive.create_folder_structure()
+                
+                if result.get('success'):
+                    created = result.get('created', [])
+                    skipped = result.get('skipped', [])
+                    total = result.get('total', 0)
+                    
+                    message = f"Folder structure created: {len(created)} new, {len(skipped)} existing, {total} total"
+                    update_progress(1.0, message)
+                    return {
+                        'success': True,
+                        'mode': 'init',
+                        'folders_created': len(created),
+                        'folders_skipped': len(skipped),
+                        'folders_total': total,
+                        'created': created,
+                        'skipped': skipped
+                    }
+                else:
+                    error = result.get('error', 'Unknown error')
+                    update_progress(1.0, f"Error creating folders: {error}")
+                    return {
+                        'success': False,
+                        'mode': 'init',
+                        'error': error
+                    }
+            
             # Step 1: Resolve folder ID and get delta token (15%)
             update_progress(0.15, "Resolving folder ID...")
             

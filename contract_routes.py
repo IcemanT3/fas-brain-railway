@@ -19,7 +19,7 @@ class OneDriveSyncRequest(BaseModel):
     site_id: Optional[str] = Field(None, description="SharePoint site id (optional if default configured)")
     drive_id: Optional[str] = Field(None, description="Drive id (optional if default configured)")
     folder_id: Optional[str] = Field(None, description="Folder id/path to sync")
-    mode: Literal["full","delta"] = Field("delta", description="delta = resume with token; full = rescan")
+    mode: Literal["init","full","delta"] = Field("delta", description="init = create folders only; delta = resume with token; full = rescan")
     reason: Optional[str] = Field(None, description="Audit note for who/why triggered")
 
 class JobStatusResponse(BaseModel):

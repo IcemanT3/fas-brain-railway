@@ -162,7 +162,7 @@ class OneDriveManager:
         data = {
             "name": folder_name,
             "folder": {},
-            "@microsoft.graph.conflictBehavior": "rename"
+            "@microsoft.graph.conflictBehavior": "fail"  # Fail if exists (idempotent)
         }
         
         response = self._make_request("POST", endpoint, json=data)
@@ -172,28 +172,67 @@ class OneDriveManager:
         
         return None
     
-    def create_folder_structure(self) -> bool:
-        """Create the complete FAS Brain folder structure in OneDrive"""
+    def create_folder_structure(self) -> Dict:
+        """Create the complete FAS Brain folder structure in OneDrive (idempotent)"""
+        created = []
+        skipped = []
+        errors = []
+        
+        def safe_create(parent_path: str, folder_name: str, full_path: str):
+            """Create folder and track result"""
+            result = self.create_folder(parent_path, folder_name)
+            if result:
+                created.append(full_path)
+                return True
+            else:
+                # Check if folder already exists (409 conflict)
+                try:
+                    # Try to get folder to verify it exists
+                    drive_path = self._get_drive_path()
+                    endpoint = f"{drive_path}/root:/{full_path}"
+                    response = self._make_request("GET", endpoint)
+                    if response.status_code == 200:
+                        skipped.append(full_path)
+                        return True
+                except:
+                    pass
+                errors.append(full_path)
+                return False
+        
         try:
             # Create root FAS_Brain folder first
-            self.create_folder("", self.root_folder)
+            safe_create("", self.root_folder, self.root_folder)
             
             # Create subfolders under FAS_Brain/
             for folder_name, description in self.folder_structure.items():
                 if isinstance(description, str):
                     # Simple folder under FAS_Brain/
-                    self.create_folder(self.root_folder, folder_name)
+                    full_path = f"{self.root_folder}/{folder_name}"
+                    safe_create(self.root_folder, folder_name, full_path)
                 elif isinstance(description, dict):
                     # Folder with subfolders under FAS_Brain/
-                    self.create_folder(self.root_folder, folder_name)
+                    full_path = f"{self.root_folder}/{folder_name}"
+                    safe_create(self.root_folder, folder_name, full_path)
                     parent_path = f"{self.root_folder}/{folder_name}"
                     for subfolder_name in description.keys():
-                        self.create_folder(parent_path, subfolder_name)
+                        subfolder_full_path = f"{parent_path}/{subfolder_name}"
+                        safe_create(parent_path, subfolder_name, subfolder_full_path)
             
-            return True
+            return {
+                "success": len(errors) == 0,
+                "created": created,
+                "skipped": skipped,
+                "errors": errors,
+                "total": len(created) + len(skipped) + len(errors)
+            }
         except Exception as e:
-            print(f"Error creating folder structure: {e}")
-            return False
+            return {
+                "success": False,
+                "error": str(e),
+                "created": created,
+                "skipped": skipped,
+                "errors": errors
+            }
     
     def upload_file(self, local_path: str, onedrive_path: str) -> Optional[Dict]:
         """Upload a file to OneDrive"""
