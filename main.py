@@ -13,6 +13,14 @@ import os
 import sys
 from pathlib import Path
 
+# === Preflight: Check Required Environment Variables ===
+need = ["SUPABASE_URL","SUPABASE_SERVICE_ROLE_KEY","OPENAI_API_KEY","CHARTER_PROJECT","CHARTER_HASH"]
+miss = [k for k in need if not os.getenv(k)]
+if miss:
+    print(f"❌ Missing environment variables: {', '.join(miss)}")
+    sys.exit(1)
+print("✅ All required environment variables present")
+
 # === Charter Verification ===
 # Verify charter before any other imports or initialization
 try:
