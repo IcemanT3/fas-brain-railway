@@ -525,12 +525,6 @@ async def get_health_dashboard():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.getenv("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
-
-
 # OneDrive Integration
 from onedrive_manager import OneDriveManager
 from document_organizer import DocumentOrganizer
@@ -660,6 +654,13 @@ async def create_share_link(folder_path: str, link_type: str = "view"):
             raise HTTPException(status_code=400, detail="Failed to create share link")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
+
+
 
 
 @app.get("/api/case-packages")
