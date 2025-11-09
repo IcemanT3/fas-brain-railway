@@ -536,7 +536,8 @@ from onedrive_manager import OneDriveManager
 from document_organizer import DocumentOrganizer
 from case_package_generator import CasePackageGenerator
 
-onedrive = OneDriveManager()
+# Don't initialize at startup - create instances per request
+# onedrive = OneDriveManager()  # Removed - causes 404s if init fails
 organizer = DocumentOrganizer()
 package_generator = CasePackageGenerator(processor.supabase)
 
@@ -545,6 +546,7 @@ package_generator = CasePackageGenerator(processor.supabase)
 async def get_onedrive_auth_url():
     """Get OneDrive OAuth authorization URL"""
     try:
+        onedrive = OneDriveManager()  # Create instance per request
         auth_url = onedrive.get_auth_url()
         return {"auth_url": auth_url}
     except Exception as e:
@@ -555,6 +557,7 @@ async def get_onedrive_auth_url():
 async def onedrive_callback(code: str):
     """Handle OneDrive OAuth callback"""
     try:
+        onedrive = OneDriveManager()  # Create instance per request
         success = onedrive.exchange_code_for_token(code)
         if success:
             # Create folder structure
@@ -576,6 +579,7 @@ async def process_inbox():
     - Generate case packages
     """
     try:
+        onedrive = OneDriveManager()  # Create instance per request
         # Get files from inbox
         inbox_files = onedrive.monitor_inbox()
         
@@ -637,6 +641,7 @@ async def process_inbox():
 async def list_onedrive_folders(folder_path: str = ""):
     """List files in a OneDrive folder"""
     try:
+        onedrive = OneDriveManager()  # Create instance per request
         files = onedrive.list_files(folder_path)
         return {"files": files, "folder": folder_path}
     except Exception as e:
@@ -647,6 +652,7 @@ async def list_onedrive_folders(folder_path: str = ""):
 async def create_share_link(folder_path: str, link_type: str = "view"):
     """Create a sharing link for a OneDrive folder"""
     try:
+        onedrive = OneDriveManager()  # Create instance per request
         share_link = onedrive.create_share_link(folder_path, link_type)
         if share_link:
             return {"share_link": share_link, "folder": folder_path}
