@@ -93,6 +93,23 @@ job_queue.start_workers(num_workers=3)
 from add_contract_routes import add_contract_compliance
 add_contract_compliance(app, job_queue, async_processor)
 
+# === Add OAuth callback route (must be at /auth/callback for redirect URI) ===
+@app.get("/auth/callback")
+async def oauth_callback(code: str):
+    """Handle OneDrive OAuth callback at /auth/callback"""
+    try:
+        from onedrive_manager import OneDriveManager
+        manager = OneDriveManager()
+        success = manager.exchange_code_for_token(code)
+        if success:
+            # Create folder structure
+            manager.create_folder_structure()
+            return {"status": "success", "message": "OneDrive connected successfully"}
+        else:
+            raise HTTPException(status_code=400, detail="Failed to exchange code for token")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 # === Route Table Printout (for debugging) ===
 print("\n=== Registered Routes ===")
 for route in app.routes:
