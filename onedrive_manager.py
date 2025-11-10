@@ -7,6 +7,7 @@ import requests
 from typing import List, Dict, Optional
 import json
 from datetime import datetime, timedelta
+from oauth_token_store import oauth_token_store
 
 class OneDriveManager:
     """Manage OneDrive folder structure and file operations"""
@@ -27,9 +28,14 @@ class OneDriveManager:
         if not all([self.client_id, self.client_secret, self.tenant_id]):
             print("WARNING: Microsoft credentials not configured. OneDrive features will be disabled.")
         
-        self.access_token = None
-        self.refresh_token = None
-        self.token_expiry = None
+        # Load tokens from persistent storage
+        self._load_tokens()
+        
+        # If tokens not loaded, initialize as None
+        if not hasattr(self, 'access_token'):
+            self.access_token = None
+            self.refresh_token = None
+            self.token_expiry = None
         
         # OneDrive folder structure - all under FAS_Brain/ to avoid root clutter
         self.root_folder = "FAS_Brain"
@@ -56,6 +62,25 @@ class OneDriveManager:
             "04_PROCESSED_ORIGINALS": "Archive of original processed documents",
             "05_CASE_PACKAGES": "Comprehensive case summaries"
         }
+    
+    def _load_tokens(self):
+        """Load OAuth tokens from persistent storage"""
+        token_data = oauth_token_store.get_tokens()
+        if token_data:
+            self.access_token = token_data.get("access_token")
+            self.refresh_token = token_data.get("refresh_token")
+            self.token_expiry = token_data.get("token_expiry")
+            print(f"✅ Loaded OAuth tokens from storage (expires: {self.token_expiry})")
+        else:
+            print("ℹ️  No stored OAuth tokens found")
+    
+    def _save_tokens(self):
+        """Save OAuth tokens to persistent storage"""
+        if self.access_token:
+            expires_in = 3600  # Default 1 hour
+            if self.token_expiry:
+                expires_in = int((self.token_expiry - datetime.now()).total_seconds())
+            oauth_token_store.set_tokens(self.access_token, self.refresh_token, expires_in)
     
     def get_auth_url(self) -> str:
         """Generate OAuth authorization URL"""
@@ -93,6 +118,10 @@ class OneDriveManager:
             self.refresh_token = token_data.get("refresh_token")
             expires_in = token_data.get("expires_in", 3600)
             self.token_expiry = datetime.now() + timedelta(seconds=expires_in)
+            
+            # Save tokens to persistent storage
+            self._save_tokens()
+            
             return True
         
         return False
@@ -119,6 +148,10 @@ class OneDriveManager:
             self.refresh_token = token_data.get("refresh_token", self.refresh_token)
             expires_in = token_data.get("expires_in", 3600)
             self.token_expiry = datetime.now() + timedelta(seconds=expires_in)
+            
+            # Save refreshed tokens to persistent storage
+            self._save_tokens()
+            
             return True
         
         return False
