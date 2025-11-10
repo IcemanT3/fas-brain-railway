@@ -2,6 +2,7 @@
 """
 FAS Brain - FastAPI Backend
 Main application file for Railway deployment
+Trigger redeploy with SUPABASE_DB_URL
 """
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form
