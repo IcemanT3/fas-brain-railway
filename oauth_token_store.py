@@ -4,21 +4,50 @@ OAuth Token Store - Persist OneDrive OAuth tokens
 
 import os
 from typing import Optional, Dict
-from supabase import create_client, Client
 from datetime import datetime, timedelta
-import json
+import psycopg2
+from psycopg2.extras import RealDictCursor
 
 class OAuthTokenStore:
     """Store and retrieve OneDrive OAuth tokens"""
     
     def __init__(self):
-        """Initialize Supabase client for token persistence"""
-        supabase_url = os.getenv("SUPABASE_URL")
-        supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-        self.supabase: Client = create_client(supabase_url, supabase_key) if supabase_url and supabase_key else None
+        """Initialize PostgreSQL connection for token persistence"""
+        self.db_url = os.getenv("SUPABASE_DB_URL")
         
         # Fallback to environment variables if database not available
-        self.use_env_fallback = not self.supabase
+        self.use_env_fallback = not self.db_url
+        
+        # Ensure table exists on init
+        if not self.use_env_fallback:
+            self._ensure_table_exists()
+    
+    def _get_connection(self):
+        """Get a new database connection"""
+        return psycopg2.connect(self.db_url)
+    
+    def _ensure_table_exists(self):
+        """Ensure the oauth_tokens table exists"""
+        try:
+            conn = self._get_connection()
+            cur = conn.cursor()
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS oauth_tokens (
+                    id BIGSERIAL PRIMARY KEY,
+                    service TEXT NOT NULL UNIQUE,
+                    access_token TEXT NOT NULL,
+                    refresh_token TEXT,
+                    token_expiry TIMESTAMP WITH TIME ZONE,
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+                )
+            """)
+            conn.commit()
+            cur.close()
+            conn.close()
+            print("✅ oauth_tokens table ensured")
+        except Exception as e:
+            print(f"Error ensuring oauth_tokens table: {e}")
     
     def get_tokens(self) -> Optional[Dict]:
         """
@@ -42,15 +71,21 @@ class OAuthTokenStore:
             return None
         
         try:
-            # Query database for tokens
-            result = self.supabase.table("oauth_tokens").select("*").eq("service", "onedrive").limit(1).execute()
+            conn = self._get_connection()
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            cur.execute(
+                "SELECT access_token, refresh_token, token_expiry FROM oauth_tokens WHERE service = %s LIMIT 1",
+                ('onedrive',)
+            )
+            result = cur.fetchone()
+            cur.close()
+            conn.close()
             
-            if result.data and len(result.data) > 0:
-                token_data = result.data[0]
+            if result:
                 return {
-                    "access_token": token_data.get("access_token"),
-                    "refresh_token": token_data.get("refresh_token"),
-                    "token_expiry": datetime.fromisoformat(token_data.get("token_expiry")) if token_data.get("token_expiry") else None
+                    "access_token": result['access_token'],
+                    "refresh_token": result['refresh_token'],
+                    "token_expiry": result['token_expiry']
                 }
         except Exception as e:
             print(f"Error retrieving OAuth tokens: {e}")
@@ -80,24 +115,24 @@ class OAuthTokenStore:
             return False
         
         try:
-            # Upsert tokens in database
-            data = {
-                "service": "onedrive",
-                "access_token": access_token,
-                "refresh_token": refresh_token,
-                "token_expiry": token_expiry.isoformat(),
-                "updated_at": "now()"
-            }
+            conn = self._get_connection()
+            cur = conn.cursor()
             
-            # Check if exists
-            existing = self.supabase.table("oauth_tokens").select("id").eq("service", "onedrive").limit(1).execute()
+            # Upsert using ON CONFLICT
+            cur.execute("""
+                INSERT INTO oauth_tokens (service, access_token, refresh_token, token_expiry, updated_at)
+                VALUES (%s, %s, %s, %s, NOW())
+                ON CONFLICT (service)
+                DO UPDATE SET 
+                    access_token = EXCLUDED.access_token,
+                    refresh_token = EXCLUDED.refresh_token,
+                    token_expiry = EXCLUDED.token_expiry,
+                    updated_at = NOW()
+            """, ('onedrive', access_token, refresh_token, token_expiry))
             
-            if existing.data and len(existing.data) > 0:
-                # Update existing
-                self.supabase.table("oauth_tokens").update(data).eq("service", "onedrive").execute()
-            else:
-                # Insert new
-                self.supabase.table("oauth_tokens").insert(data).execute()
+            conn.commit()
+            cur.close()
+            conn.close()
             
             print(f"✅ OAuth tokens stored successfully (expires: {token_expiry.isoformat()})")
             return True
