@@ -31,7 +31,7 @@ async def get_auth_url():
         raise HTTPException(status_code=500, detail="OneDrive OAuth not configured (missing MICROSOFT_CLIENT_ID or MICROSOFT_TENANT_ID)")
     
     # Build OAuth URL
-    redirect_uri = os.getenv("MICROSOFT_REDIRECT_URI", "https://fas-brain-railway-production.up.railway.app/auth/callback")
+    redirect_uri = os.getenv("OAUTH_REDIRECT_URL", os.getenv("MICROSOFT_REDIRECT_URI", "https://fas-brain-railway-production.up.railway.app/api/onedrive/callback"))
     scope = "Files.ReadWrite.All offline_access"
     
     params = {
