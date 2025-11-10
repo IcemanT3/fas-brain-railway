@@ -15,7 +15,7 @@ class OneDriveManager:
         self.client_id = os.getenv("MICROSOFT_CLIENT_ID")
         self.client_secret = os.getenv("MICROSOFT_CLIENT_SECRET")
         self.tenant_id = os.getenv("MICROSOFT_TENANT_ID")
-        self.redirect_uri = os.getenv("MICROSOFT_REDIRECT_URI", "https://fas-brain-railway-production.up.railway.app/auth/callback")
+        self.redirect_uri = os.getenv("OAUTH_REDIRECT_URL", os.getenv("MICROSOFT_REDIRECT_URI", "https://fas-brain-railway-production.up.railway.app/api/onedrive/callback"))
         
         # Service account support (optional, defaults to /me for delegated auth)
         self.user_id = os.getenv("ONEDRIVE_USER_ID")  # e.g., "dih-sync@fascorp.net" or user GUID
