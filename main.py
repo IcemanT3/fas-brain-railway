@@ -22,6 +22,13 @@ if miss:
     sys.exit(1)
 print("✅ All required environment variables present")
 
+# === Debug: Log database connection info (masked) ===
+import re
+dsn = os.getenv("SUPABASE_DB_URL", "")
+masked = re.sub(r"://([^:]+):([^@]+)@", r"://\1:****@", dsn)
+print(f"[DB] Using SUPABASE_DB_URL={masked}")
+print(f"[DB] PGHOST={os.getenv('PGHOST')}, PGDATABASE={os.getenv('PGDATABASE')}")
+
 # === Initialize FastAPI FIRST (before charter verification) ===
 app = FastAPI(
     title="FAS Brain API",
